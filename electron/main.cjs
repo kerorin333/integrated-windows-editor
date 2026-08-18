@@ -1,6 +1,8 @@
 const { app, BrowserWindow, dialog, ipcMain, Menu } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs/promises");
+const { execFile, spawn } = require("node:child_process");
+const nativeFs = require("node:fs");
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -55,6 +57,31 @@ function createApplicationMenu(win) {
 }
 
 let activeWatcher = null;
+
+function runCommand(command, args, cwd) {
+  return new Promise((resolve) => {
+    execFile(command, args, { cwd, windowsHide: true, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
+      resolve({ ok: !error, stdout: String(stdout || ""), stderr: String(stderr || ""), error: error ? String(error.message || error) : "" });
+    });
+  });
+}
+
+function commandFailure(result, fallback) {
+  return String(result.stderr || result.stdout || result.error || fallback).trim();
+}
+
+function ghExecutable() {
+  if (process.platform === "win32") {
+    const candidates = ["C:\\Program Files\\GitHub CLI\\gh.exe", "C:\\Program Files (x86)\\GitHub CLI\\gh.exe"];
+    const installed = candidates.find((candidate) => nativeFs.existsSync(candidate));
+    if (installed) return installed;
+  }
+  return "gh";
+}
+
+function runGh(args, cwd) {
+  return runCommand(ghExecutable(), args, cwd);
+}
 
 function safeSegment(value, fallback) {
   const cleaned = String(value || fallback).replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").trim();
@@ -172,6 +199,56 @@ ipcMain.handle("archive-desk:read-folder", async (_event, folderPath) => {
   } catch {
     return null;
   }
+});
+
+ipcMain.handle("archive-desk:github-login", async () => {
+  try {
+    const gh = ghExecutable();
+    const child = process.platform === "win32"
+      ? spawn("cmd.exe", ["/c", `"${gh}" auth login`], { detached: true, stdio: "ignore", windowsHide: false })
+      : spawn(gh, ["auth", "login"], { detached: true, stdio: "ignore" });
+    child.unref();
+    return { started: true };
+  } catch (error) {
+    return { started: false, message: String(error?.message || error) };
+  }
+});
+
+ipcMain.handle("archive-desk:github-status", async (_event, folderPath) => {
+  if (!folderPath) return { connected: false, authenticated: false, message: "互換フォルダーを先に開いてください。" };
+  const root = await runCommand("git", ["-C", folderPath, "rev-parse", "--show-toplevel"], folderPath);
+  if (!root.ok) return { connected: false, authenticated: false, message: "この互換フォルダーはGitリポジトリではありません。" };
+  const remote = await runCommand("git", ["-C", folderPath, "remote", "get-url", "origin"], folderPath);
+  const branch = await runCommand("git", ["-C", folderPath, "branch", "--show-current"], folderPath);
+  const auth = await runGh(["auth", "status", "--hostname", "github.com"], folderPath);
+  return {
+    connected: remote.ok,
+    authenticated: auth.ok,
+    folderPath,
+    remote: remote.ok ? remote.stdout.trim() : "",
+    branch: branch.stdout.trim() || "main",
+    message: remote.ok ? (auth.ok ? "GitHubへ接続済みです。" : "GitHub認証が未完了です。初回接続を開始してください。") : "originリモートが設定されていません。",
+  };
+});
+
+ipcMain.handle("archive-desk:github-sync", async (_event, folderPath, commitMessage) => {
+  if (!folderPath) return { ok: false, code: "NO_FOLDER", message: "互換フォルダーを先に開いてください。" };
+  const status = await runCommand("git", ["-C", folderPath, "status", "--porcelain"], folderPath);
+  if (!status.ok) return { ok: false, code: "NOT_REPO", message: "Gitリポジトリとして開けません。" };
+  if (!status.stdout.trim()) return { ok: true, unchanged: true, message: "同期する変更はありません。" };
+  const add = await runCommand("git", ["-C", folderPath, "add", "-A"], folderPath);
+  if (!add.ok) return { ok: false, code: "ADD_FAILED", message: commandFailure(add, "変更の準備に失敗しました。") };
+  const commit = await runCommand("git", ["-C", folderPath, "commit", "-m", commitMessage || `${new Date().toISOString().slice(0, 10)} 執筆内容を同期`], folderPath);
+  if (!commit.ok) return { ok: false, code: "COMMIT_FAILED", message: commandFailure(commit, "変更の記録に失敗しました。") };
+  const push = await runCommand("git", ["-C", folderPath, "push"], folderPath);
+  if (!push.ok) return { ok: false, code: "PUSH_FAILED", message: commandFailure(push, "GitHubへの送信に失敗しました。認証とリモート設定を確認してください。") };
+  return { ok: true, unchanged: false, message: "GitHubへ同期しました。" };
+});
+
+ipcMain.handle("archive-desk:github-pull", async (_event, folderPath) => {
+  if (!folderPath) return { ok: false, message: "互換フォルダーを先に開いてください。" };
+  const pull = await runCommand("git", ["-C", folderPath, "pull", "--ff-only"], folderPath);
+  return pull.ok ? { ok: true, message: pull.stdout.trim() || "GitHubから最新状態を取得しました。" } : { ok: false, message: commandFailure(pull, "取得できませんでした。先に差分を確認してください。") };
 });
 
 ipcMain.handle("archive-desk:watch-folder", async (_event, folderPath) => {

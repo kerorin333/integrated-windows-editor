@@ -9,6 +9,10 @@ contextBridge.exposeInMainWorld("archiveDesk", {
   writeFolder: (folderPath, content) => ipcRenderer.invoke("archive-desk:write-folder", folderPath, content),
   readFolder: (folderPath) => ipcRenderer.invoke("archive-desk:read-folder", folderPath),
   watchFolder: (folderPath) => ipcRenderer.invoke("archive-desk:watch-folder", folderPath),
+  githubLogin: () => ipcRenderer.invoke("archive-desk:github-login"),
+  githubStatus: (folderPath) => ipcRenderer.invoke("archive-desk:github-status", folderPath),
+  githubSync: (folderPath, commitMessage) => ipcRenderer.invoke("archive-desk:github-sync", folderPath, commitMessage),
+  githubPull: (folderPath) => ipcRenderer.invoke("archive-desk:github-pull", folderPath),
   onMenuAction: (listener) => {
     const handler = (_event, action) => listener(action);
     ipcRenderer.on("archive-desk:menu-action", handler);

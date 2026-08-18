@@ -297,3 +297,47 @@
 - [ ] 43034afaのチェックポイントカードを開く
 - [ ] 管理画面のコード欄からZIPをダウンロードする
 - [ ] Downloads内に新しいZIPが作成されたことを確認する
+
+## GitHub初回登録
+
+- [ ] GitHubのログイン・連携状態を確認する
+- [ ] リポジトリ名と公開範囲を確認する
+- [ ] node_modules、dist、releaseなどの生成物を除外する
+- [ ] ソース、Electron設定、ドキュメント、ロックファイルを登録する
+- [ ] 初回コミットとpushを確認する
+- [ ] 別PCからcloneする手順を案内する
+
+## WindowsターミナルからGitHubへpush
+
+- [ ] gh auth loginまたはGit Credential Managerで認証する
+- [ ] GitHubリポジトリURLをremoteへ登録する
+- [ ] node_modules・dist・releaseを除外して初回コミットする
+- [ ] mainブランチをGitHubへpushする
+- [ ] GitHub上のファイル一覧を確認する
+
+## Windows GitHub CLI導入
+
+- [x] GitHub CLIをWindowsへインストールする
+- [x] 新しいPowerShellでgh --versionを確認する
+- [x] gh auth loginでGitHub認証する
+- [x] integrated-windows-editorへ初回pushする
+- [x] Windows側でGitHub CLIのインストール状態を確認する
+- [x] PATH反映またはGitHub CLI再インストールを行う
+
+## GitHub同期ボタン改定
+
+- [x] Electron側にGitHub接続状態・リポジトリ設定を追加する
+- [x] 初回接続と以後のワンクリック同期を分離する
+- [x] 保存済みのMarkdown・project.jsonを同期対象にする
+- [x] GitHubから取得・差分確認の導線を追加する
+- [x] 同期結果・競合・未接続・認証エラーを表示する
+- [x] 日本語運用ガイドとREADMEを更新する
+- [ ] WindowsステージングビルドとGitHub Releaseを更新する
+
+## v0.4.0 GitHub反映
+
+- [ ] v0.4.0チェックポイントのコードZIPをWindows側へダウンロードする
+- [ ] 既存プロジェクトをバックアップして改訂版を配置する
+- [ ] git statusで差分と除外対象を確認する
+- [ ] v0.4.0改訂版をcommitしてmainへpushする
+- [ ] GitHub上のソース更新を確認する

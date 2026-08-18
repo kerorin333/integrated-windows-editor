@@ -13,6 +13,8 @@ import {
   FolderOpen,
   GripVertical,
   History,
+  Github,
+  RefreshCw,
   LayoutList,
   Menu,
   MoreHorizontal,
@@ -45,6 +47,10 @@ declare global {
       watchFolder: (folderPath: string) => Promise<boolean>;
       onMenuAction: (listener: (action: string) => void) => () => void;
       onExternalChange: (listener: (filename: string) => void) => () => void;
+      githubLogin: () => Promise<{ started: boolean; message?: string }>;
+      githubStatus: (folderPath: string | null) => Promise<{ connected: boolean; authenticated: boolean; folderPath?: string; remote?: string; branch?: string; message: string }>;
+      githubSync: (folderPath: string, commitMessage?: string) => Promise<{ ok: boolean; unchanged?: boolean; code?: string; message: string }>;
+      githubPull: (folderPath: string) => Promise<{ ok: boolean; message: string }>;
     };
   }
 }
@@ -366,6 +372,9 @@ export default function Home() {
   const [treeMode, setTreeMode] = useState<"expanded" | "collapsed">("expanded");
   const [showProjects, setShowProjects] = useState(true);
   const [showReleasePanel, setShowReleasePanel] = useState(false);
+  const [showGithubPanel, setShowGithubPanel] = useState(false);
+  const [githubBusy, setGithubBusy] = useState(false);
+  const [githubState, setGithubState] = useState<{ connected: boolean; authenticated: boolean; remote?: string; branch?: string; message: string } | null>(null);
   const [openFolderPath, setOpenFolderPath] = useState<string | null>(null);
   const [externalChangeFile, setExternalChangeFile] = useState<string | null>(null);
   const [externalDiff, setExternalDiff] = useState<{ fileName: string; before: string; after: string } | null>(null);
@@ -616,6 +625,70 @@ export default function Home() {
     } else toast.error("プロジェクト情報が見つかりません", { description: ".archive-desk/project.jsonを含むフォルダーを選択してください" });
   }
 
+  async function checkGithubConnection() {
+    if (!window.archiveDesk?.githubStatus) {
+      toast.info("GitHub連携はWindowsアプリで利用できます");
+      return;
+    }
+    const state = await window.archiveDesk.githubStatus(openFolderPath);
+    setGithubState(state);
+    setShowGithubPanel(true);
+    if (state.connected && state.authenticated) toast.success("GitHubへ接続済みです", { description: state.remote });
+  }
+
+  async function startGithubLogin() {
+    if (!window.archiveDesk?.githubLogin) {
+      toast.info("GitHub初回接続はWindowsアプリで利用できます");
+      return;
+    }
+    const result = await window.archiveDesk.githubLogin();
+    if (result.started) toast.info("GitHub認証を開始しました", { description: "開いたターミナルで初回認証を完了してから、接続確認を押してください" });
+    else toast.error("GitHub認証を開始できませんでした", { description: result.message || "GitHub CLIをインストールしてください" });
+  }
+
+  async function syncGithub() {
+    if (!openFolderPath || !window.archiveDesk?.githubSync) {
+      setShowGithubPanel(true);
+      toast.info("先にGitHub同期先の互換フォルダーを開いてください");
+      return;
+    }
+    setGithubBusy(true);
+    try {
+      const content = JSON.stringify(buildProjectPayload(), null, 2);
+      if (window.archiveDesk.writeFolder) await window.archiveDesk.writeFolder(openFolderPath, content);
+      const result = await window.archiveDesk.githubSync(openFolderPath, `${new Date().toISOString().slice(0, 10)} ${projectSettings.projectName}を同期`);
+      if (result.ok) {
+        setSaved(true);
+        setGithubState((current) => current ? { ...current, message: result.message } : current);
+        toast.success(result.unchanged ? "GitHubは最新です" : "GitHubへ同期しました", { description: result.message });
+      } else {
+        setShowGithubPanel(true);
+        toast.error("GitHub同期に失敗しました", { description: result.message });
+      }
+    } finally {
+      setGithubBusy(false);
+    }
+  }
+
+  async function pullGithub() {
+    if (!openFolderPath || !window.archiveDesk?.githubPull) {
+      toast.info("先にGitHub同期先の互換フォルダーを開いてください");
+      return;
+    }
+    setGithubBusy(true);
+    try {
+      const result = await window.archiveDesk.githubPull(openFolderPath);
+      if (!result.ok) {
+        toast.error("GitHubから取得できませんでした", { description: result.message });
+        return;
+      }
+      await openCompatibleFolder();
+      toast.success("GitHubから最新状態を取得しました", { description: result.message });
+    } finally {
+      setGithubBusy(false);
+    }
+  }
+
   async function saveProject() {
     const content = JSON.stringify(buildProjectPayload(), null, 2);
     localStorage.setItem("archive-desk-project", content);
@@ -750,7 +823,7 @@ export default function Home() {
       <header className="topbar">
         <div className="brand-lockup"><div className="brand-mark"><img src="/manus-storage/archive-desk-logo_58905483.png" alt="" /></div><div><p className="eyebrow">長編執筆 / 編集机</p><h1>統合Windowsエディタ</h1></div></div>
         <div className="work-context">{!showProjects && <button className="column-toggle top-column-toggle" onClick={() => setShowProjects(true)} aria-label="作品棚を展開"><PanelLeftOpen size={15} /></button>}<span className="context-dot" /><span>{projectSettings.projectName}</span><span className="slash">/</span><span>{projectSettings.genre}</span></div>
-        <div className="top-actions"><span className="save-state"><span className={`save-dot ${saved ? "saved" : "unsaved"}`} />{saved ? "保存済み" : "未保存"}{autoSavedAt && <small>自動保存 {autoSavedAt}</small>}</span><button className="settings-launch" aria-label="作品設定・目標を開く" onClick={() => setShowSettingsPanel(true)}><Settings2 size={15} /><span>作品設定・目標</span></button><button className="icon-button" aria-label="版情報と履歴" onClick={() => setShowReleasePanel(true)}><History size={17} /></button></div>
+        <div className="top-actions"><span className="save-state"><span className={`save-dot ${saved ? "saved" : "unsaved"}`} />{saved ? "保存済み" : "未保存"}{autoSavedAt && <small>自動保存 {autoSavedAt}</small>}</span><button className="github-sync-button" onClick={() => void syncGithub()} disabled={githubBusy} title="自動保存済みの本文とproject.jsonをGitHubへ送信"><Github size={15} />{githubBusy ? "同期中…" : "GitHubへ同期"}</button><button className="settings-launch" aria-label="作品設定・目標を開く" onClick={() => setShowSettingsPanel(true)}><Settings2 size={15} /><span>作品設定・目標</span></button><button className="icon-button" aria-label="GitHub設定" onClick={() => void checkGithubConnection()}><RefreshCw size={16} /></button><button className="icon-button" aria-label="版情報と履歴" onClick={() => setShowReleasePanel(true)}><History size={17} /></button></div>
       </header>
 
       <div className={`app-body ${showProjects ? "" : "projects-collapsed"}`}>
@@ -788,9 +861,10 @@ export default function Home() {
         </aside>
       </div>
       {showStorageGuide && <div className="release-overlay" role="dialog" aria-modal="true" aria-label="作品の保存先"><div className="release-panel storage-guide-panel"><div className="release-panel-head"><div><p className="eyebrow">新しい作品 / 保存方式</p><h2>作品の保存先を設定</h2></div><button className="icon-button" onClick={() => setShowStorageGuide(false)} aria-label="保存先案内を閉じる"><X size={18} /></button></div><p className="storage-guide-lead">このエディタは、本文を独自形式に閉じ込めず、プレーンテキストのMarkdownで保存します。構成・進捗・締切などの執筆情報は、別の管理データとして保持します。</p><div className="storage-guide-grid"><div><strong>互換フォルダー</strong><p>manuscript/に本文Markdown、.archive-desk/project.jsonに構成・進捗を保存します。VS Code、Obsidian、GitHubで扱えます。</p></div><div><strong>JSONファイル</strong><p>作品全体の状態を一つにまとめたバックアップです。互換フォルダー内にもproject.jsonとして含まれます。</p></div></div><p className="storage-guide-note">iCloudがない場合も、このPCの任意のフォルダーを保存先に指定できます。保存先を後で決める場合は、アプリ内のローカル自動保存が先に働きます。</p><div className="diff-footer"><span>保存先は後から「互換保存」で変更できます。</span><div className="storage-guide-actions"><button className="toolbar-button" onClick={() => setShowStorageGuide(false)}>後で設定</button><button className="release-restore" onClick={async () => { setShowStorageGuide(false); await saveCompatibleFolder(); }}>保存先を選ぶ</button></div></div></div></div>}
+      {showGithubPanel && <div className="release-overlay" role="dialog" aria-modal="true" aria-label="GitHub同期設定"><div className="release-panel github-panel"><div className="release-panel-head"><div><p className="eyebrow">外部バックアップ / GitHub</p><h2>GitHub同期</h2></div><button className="icon-button" onClick={() => setShowGithubPanel(false)} aria-label="GitHub同期設定を閉じる"><X size={18} /></button></div><p className="settings-intro">本文とproject.jsonは自動保存されます。GitHubには、執筆の区切りで「GitHubへ同期」を押したときだけ記録します。</p><div className="github-status-box"><span className={`github-status-dot ${githubState?.connected && githubState.authenticated ? "connected" : "disconnected"}`} /><div><strong>{githubState?.connected && githubState.authenticated ? "GitHub接続済み" : "接続確認が必要です"}</strong><p>{githubState?.message || "互換フォルダーを開いて接続状態を確認してください。"}</p>{githubState?.remote && <small>{githubState.remote}　·　{githubState.branch || "main"}</small>}</div></div><div className="github-actions"><button className="toolbar-button" onClick={() => void checkGithubConnection()}><RefreshCw size={14} /> 接続確認</button><button className="toolbar-button" onClick={() => void startGithubLogin()}><Github size={14} /> 初回接続を開始</button><button className="release-restore" onClick={() => void pullGithub()} disabled={githubBusy}><RefreshCw size={14} /> GitHubから取得</button></div><div className="github-help"><strong>使い方</strong><p>初回だけ「初回接続を開始」でGitHub認証を行います。以後は作品を保存した後、上部の「GitHubへ同期」を押すだけです。別PCやObsidianの変更を取り込むときは、差分を確認してから「GitHubから取得」を使います。</p><p>認証情報は作品フォルダーやproject.jsonには保存しません。Windows側のGit認証とGitHub CLIを利用します。</p></div></div></div>}
       {showSettingsPanel && <div className="release-overlay" role="dialog" aria-modal="true" aria-label="執筆設定"><div className="release-panel settings-panel"><div className="release-panel-head"><div><p className="eyebrow">作品設定 / 進捗</p><h2>執筆目標を設定</h2></div><button className="icon-button" onClick={() => setShowSettingsPanel(false)} aria-label="設定を閉じる"><X size={18} /></button></div><p className="settings-intro">作品全体の目標と締切を設定すると、右側の進捗カードと1日あたりの必要ペースが更新されます。</p><div className="settings-form"><label>作品名<span className="settings-field"><input type="text" value={projectSettings.projectName} onChange={(event) => setProjectSettings((current) => ({ ...current, projectName: event.target.value }))} /></span></label><label>ジャンル<span className="settings-field"><input type="text" value={projectSettings.genre} placeholder="例：長編ミステリー" onChange={(event) => setProjectSettings((current) => ({ ...current, genre: event.target.value }))} /></span></label><label>応募先<span className="settings-field"><input type="text" value={projectSettings.submissionTarget} placeholder="例：小説新人賞" onChange={(event) => setProjectSettings((current) => ({ ...current, submissionTarget: event.target.value }))} /></span></label><label>作品全体の目標文字数<span className="settings-field"><input type="number" min="1" step="100" value={projectSettings.targetWords} onChange={(event) => setProjectSettings((current) => ({ ...current, targetWords: Number(event.target.value) }))} /><em>字</em></span></label><label>締切日<span className="settings-field"><input type="date" value={projectSettings.deadline} onChange={(event) => setProjectSettings((current) => ({ ...current, deadline: event.target.value }))} /></span></label><label>1日あたりの執筆目標<span className="settings-field"><input type="number" min="0" step="50" value={projectSettings.dailyGoal} onChange={(event) => setProjectSettings((current) => ({ ...current, dailyGoal: Number(event.target.value) }))} /><em>字 / 日</em></span></label><label className="settings-block">作品メモ<textarea value={projectSettings.projectNote} placeholder="作品の方向性や応募要項のメモ" onChange={(event) => setProjectSettings((current) => ({ ...current, projectNote: event.target.value }))} /></label></div><div className="settings-summary"><span>現在の文字数<strong>{totalCount.toLocaleString()}字</strong></span><span>残り<strong>{Math.max(0, totalTarget - totalCount).toLocaleString()}字</strong></span><span>締切まで<strong>{remainingDays}日</strong></span></div><div className="diff-footer"><span>設定はプロジェクトJSONと互換フォルダー保存に含まれます。</span><button className="release-restore" onClick={() => { saveProjectSettings(projectSettings); setShowSettingsPanel(false); }}>設定を保存</button></div></div></div>}
       {externalDiff && <div className="release-overlay" role="dialog" aria-modal="true" aria-label="外部変更の差分"><div className="release-panel diff-panel"><div className="release-panel-head"><div><p className="eyebrow">外部変更 / 差分</p><h2>{externalDiff.fileName}</h2></div><button className="icon-button" onClick={() => setExternalDiff(null)} aria-label="差分を閉じる"><X size={18} /></button></div><div className="diff-grid"><section><span>現在の編集</span><pre>{externalDiff.before || "（空）"}</pre></section><section><span>外部ファイル</span><pre>{externalDiff.after || "（空）"}</pre></section></div><div className="diff-footer"><span>内容を確認後、「再読込」または「保持」を選択してください。</span><button className="release-restore" onClick={() => { setExternalDiff(null); setExternalChangeFile(null); openCompatibleFolder(); }}>外部内容を再読込</button></div></div></div>}
-      {showReleasePanel && <div className="release-overlay" role="dialog" aria-modal="true" aria-label="版情報と変更履歴"><div className="release-panel"><div className="release-panel-head"><div><p className="eyebrow">版情報 / 履歴</p><h2>改定を安全に試す</h2></div><button className="icon-button" onClick={() => setShowReleasePanel(false)} aria-label="閉じる"><X size={18} /></button></div><div className="release-current"><span className="release-badge">CURRENT</span><div><strong>即利用版 0.3.0</strong><p>Markdown互換、長編アウトライン、縦書き、DOCX、Electron保存を含む安定版。</p></div><button className="release-restore" onClick={() => saveSnapshot()}><Save size={13} /> 現在を保存</button></div><div className="release-list"><div className="release-item"><div><strong>0.3.0　即利用版</strong><span>現在の安定版 · 今日保存</span></div><button className="release-restore" onClick={() => toast.info("現在の安定版を使用中です") }><Check size={13} /> 使用中</button></div><div className="release-item muted"><div><strong>0.1.0　初回試作</strong><span>基本エディタ・アウトライン・進捗管理</span></div><button className="release-restore" onClick={() => toast.info("初回試作へ戻す場合はプロジェクトフォルダーを複製してください")}><RotateCcw size={13} /> 手順</button></div>{snapshots.map((snapshot) => <div className="release-item" key={snapshot.id}><div><strong>{snapshot.label}</strong><span>{new Date(snapshot.savedAt).toLocaleString("ja-JP")}</span></div><button className="release-restore" onClick={() => restoreSnapshot(snapshot)}><RotateCcw size={13} /> 復元</button></div>)}</div><p className="release-note">改定前にプロジェクトフォルダーを複製し、アプリ内スナップショットとチェックポイントを残してください。</p></div></div>}
+      {showReleasePanel && <div className="release-overlay" role="dialog" aria-modal="true" aria-label="版情報と変更履歴"><div className="release-panel"><div className="release-panel-head"><div><p className="eyebrow">版情報 / 履歴</p><h2>改定を安全に試す</h2></div><button className="icon-button" onClick={() => setShowReleasePanel(false)} aria-label="閉じる"><X size={18} /></button></div><div className="release-current"><span className="release-badge">CURRENT</span><div><strong>改訂版 0.4.0</strong><p>Markdown互換、長編アウトライン、縦書き、DOCX、Electron保存、GitHubワンクリック同期を含む改訂版。</p></div><button className="release-restore" onClick={() => saveSnapshot()}><Save size={13} /> 現在を保存</button></div><div className="release-list"><div className="release-item"><div><strong>0.4.0　GitHub同期改訂版</strong><span>現在の改訂版 · 今日保存</span></div><button className="release-restore" onClick={() => toast.info("現在の安定版を使用中です") }><Check size={13} /> 使用中</button></div><div className="release-item muted"><div><strong>0.1.0　初回試作</strong><span>基本エディタ・アウトライン・進捗管理</span></div><button className="release-restore" onClick={() => toast.info("初回試作へ戻す場合はプロジェクトフォルダーを複製してください")}><RotateCcw size={13} /> 手順</button></div>{snapshots.map((snapshot) => <div className="release-item" key={snapshot.id}><div><strong>{snapshot.label}</strong><span>{new Date(snapshot.savedAt).toLocaleString("ja-JP")}</span></div><button className="release-restore" onClick={() => restoreSnapshot(snapshot)}><RotateCcw size={13} /> 復元</button></div>)}</div><p className="release-note">改定前にプロジェクトフォルダーを複製し、アプリ内スナップショットとチェックポイントを残してください。GitHub同期は、互換フォルダーをGit管理している場合に利用できます。</p></div></div>}
     </main>
   );
 }
